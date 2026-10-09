@@ -19,12 +19,16 @@ public:
 
     ~DiskManager() = default;
 
+    //页面写入
     void write_page(int fd, page_id_t page_no, const char* offset, int num_bytes);
 
+    //页面读取
     void read_page(int fd, page_id_t page_no, char* offset, int num_bytes);
 
+    //创建页面（分配） 返回一个page_id
     page_id_t allocate_page(int fd);
 
+    //解除页面分配
     void deallocate_page(page_id_t page_id);
 
     /*目录操作*/

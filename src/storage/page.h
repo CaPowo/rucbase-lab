@@ -21,10 +21,11 @@
  */
 struct PageId {
     int fd = -1;  // Page所在的磁盘文件开启后的文件描述符；-1 表示尚未绑定文件。
-    page_id_t page_no = INVALID_PAGE_ID;
+    page_id_t page_no = INVALID_PAGE_ID;    //无效的PAGE_ID
 
+    //在确定两个pageID的身份，一个PageId = {文件描述符 fd, 页面编号 page_no}
     friend bool operator==(const PageId& x, const PageId& y) noexcept { return x.fd == y.fd && x.page_no == y.page_no; }
-    bool operator<(const PageId& x) const noexcept {
+    bool operator<(const PageId& x) const noexcept {  //先比较fd 如果fd相同再比较page_no
         if (fd != x.fd) return fd < x.fd;
         return page_no < x.page_no;
     }
@@ -33,7 +34,7 @@ struct PageId {
         return "{fd: " + std::to_string(fd) + " page_no: " + std::to_string(page_no) + "}";
     }
 
-    /** @brief 将文件描述符和页号编码为无符号哈希输入，避免有符号移位。 */
+    /** @brief 将文件描述符fd和页号编码page_no为无符号哈希输入，避免有符号移位。 */
     uint64_t hash_key() const noexcept {
         return (static_cast<uint64_t>(static_cast<uint32_t>(fd)) << 16U) | static_cast<uint32_t>(page_no);
     }
@@ -53,23 +54,23 @@ struct std::hash<PageId> {
  * @description: Page类声明, Page是RMDB数据块的单位、是负责数据操作Record模块的操作对象，
  * Page对象在磁盘上有文件存储, 若在Buffer中则有帧偏移, 并非特指Buffer或Disk上的数据
  */
-class Page {
+class Page {    //页类
     friend class BufferPoolManager;
 
 public:
-    Page() { reset_memory(); }
+    Page() { reset_memory(); }  //内存空间初始化
 
     ~Page() = default;
 
-    PageId get_page_id() const { return id_; }
+    PageId get_page_id() const { return id_; }     //获取页面ID
 
-    inline char* get_data() { return data_; }
+    inline char* get_data() { return data_; }       //获取数据
 
-    bool is_dirty() const { return is_dirty_; }
+    bool is_dirty() const { return is_dirty_; }     //判断是否为脏页
 
-    static constexpr size_t OFFSET_PAGE_START = 0;
-    static constexpr size_t OFFSET_LSN = 0;
-    static constexpr size_t OFFSET_PAGE_HDR = 4;
+    static constexpr size_t OFFSET_PAGE_START = 0;     //页面起始偏移量
+    static constexpr size_t OFFSET_LSN = 0;     //表示LSN从页面数据的第0字节开始
+    static constexpr size_t OFFSET_PAGE_HDR = 4;    //表示前 4 个字节预留给 LSN，其他页面头信息从第 4 个字节开始。
 
     inline lsn_t get_page_lsn() { return *reinterpret_cast<lsn_t*>(get_data() + OFFSET_LSN); }
 

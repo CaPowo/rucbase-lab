@@ -14,6 +14,7 @@
 
 #include "common/defs.h"
 #include "common/errors.h"
+#include <fcntl.h>
 
 namespace fs = std::filesystem;
 
@@ -27,10 +28,23 @@ DiskManager::DiskManager() = default;
  * @param {int} num_bytes 要写入磁盘的数据大小
  */
 void DiskManager::write_page(int fd, page_id_t page_no, const char* offset, int num_bytes) {
-    // Todo:
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用write()函数
     // 注意write返回值与num_bytes不等时 throw InternalError("DiskManager::write_page Error");
+    //PAGE SIZE是4096Bytes 所以偏移量应该是 page_no*PGAE_SIZE
+    int PGAE_SIZE = 4096;
+    off_t new_offset = lseek(fd, page_no*PGAE_SIZE, SEEK_SET);
+    if (new_offset == -1) {
+        perror("lseek");
+        close(fd);
+        exit(1);
+    }
+
+    int result = write(fd, offset, num_bytes);
+    if (result != num_bytes){
+        perror("write");
+        throw InternalError("DiskManager::write_page Error");
+    }
 }
 
 /**
@@ -41,10 +55,22 @@ void DiskManager::write_page(int fd, page_id_t page_no, const char* offset, int 
  * @param {int} num_bytes 读取的数据量大小
  */
 void DiskManager::read_page(int fd, page_id_t page_no, char* offset, int num_bytes) {
-    // Todo:
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用read()函数
     // 注意read返回值与num_bytes不等时，throw InternalError("DiskManager::read_page Error");
+    int PGAE_SIZE = 4096;
+    off_t new_offset = lseek(fd, page_no*PGAE_SIZE, SEEK_SET);
+    if (new_offset == -1) {
+        perror("lseek");
+        close(fd);
+        exit(1);
+    }
+
+    int result = read(fd, offset, num_bytes);
+    if (result != num_bytes){
+        perror("read");
+        throw InternalError("DiskManager::read Error");
+    }
 }
 
 /**
@@ -104,9 +130,26 @@ bool DiskManager::is_file(const std::string& path) {
  * @param {string} &path
  */
 void DiskManager::create_file(const std::string& path) {
-    // Todo:
     // 调用open()函数，使用O_CREAT模式
     // 注意不能重复创建相同文件
+    if (is_file(path)) {
+        throw FileExistsError(path);
+    }
+
+    int fd = open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd == -1) {
+        // 竞态：检查后被别的进程抢先创建了
+        if (errno == EEXIST) {
+            throw FileExistsError(path);
+        }
+        // 其他错误（权限不足、路径不存在等）
+        throw InternalError("Failed to create file: " + path +
+                            " (" + std::strerror(errno) + ")");
+    }
+
+    if (close(fd) == -1) {
+        throw InternalError("Failed to close file: " + path);
+    }
 }
 
 /**
@@ -114,9 +157,18 @@ void DiskManager::create_file(const std::string& path) {
  * @param {string} &path 文件所在路径
  */
 void DiskManager::destroy_file(const std::string& path) {
-    // Todo:
     // 调用unlink()函数
     // 注意不能删除未关闭的文件
+    if(path2fd_.contains(path)){
+        throw FileNotClosedError(path);
+    }
+    if (!is_file(path)) {
+        throw FileNotFoundError(path);
+    }
+
+    if (unlink(path.c_str()) < 0) {
+        throw InternalError("destory faild");
+    }
 }
 
 /**
@@ -125,10 +177,36 @@ void DiskManager::destroy_file(const std::string& path) {
  * @param {string} &path 文件所在路径
  */
 int DiskManager::open_file(const std::string& path) {
-    // Todo:
     // 调用open()函数，使用O_RDWR模式
     // 注意不能重复打开相同文件，并且需要更新文件打开列表
-    return -1;
+    // 1. 快速检查文件是否存在（友好提示，非原子）
+    if (!is_file(path)) {
+        throw FileNotFoundError(path);
+    }
+
+    // 2. 检查是否已经打开过（防重复打开）
+    if (path2fd_.count(path)) {
+        throw FileNotClosedError(path);
+    }
+
+    // 3. 打开文件
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd == -1) {
+        if (errno == ENOENT) {
+            // 竞态：检查后被别的进程删了
+            throw FileNotFoundError(path);
+        }
+        if (errno == EACCES) {
+            throw InternalError("Permission denied: " + path);
+        }
+        throw InternalError("Failed to open file: " + path +
+                            " (" + std::strerror(errno) + ")");
+    }
+
+    // 4. 更新映射表
+    path2fd_[path] = fd;
+    fd2path_[fd] = path;
+    return fd;
 }
 
 /**
@@ -136,9 +214,29 @@ int DiskManager::open_file(const std::string& path) {
  * @param {int} fd 打开的文件的文件句柄
  */
 void DiskManager::close_file(int fd) {
-    // Todo:
     // 调用close()函数
     // 注意不能关闭未打开的文件，并且需要更新文件打开列表
+    // 1. 检查 fd 是否在本管理器的打开列表里
+    if (!fd2path_.count(fd)) {
+        throw FileNotOpenError(fd);
+    }
+
+    // 2. 取出 path（关闭前先记录，之后要清 path2fd_）
+    std::string path = fd2path_.at(fd);
+
+    // 3. 关闭文件
+    int ret = close(fd);
+
+    // 4. 无论 close 成功与否，都从两个表里移除
+    //    （POSIX：close 失败后 fd 状态未定义，不能再保留）
+    fd2path_.erase(fd);
+    path2fd_.erase(path);
+
+    // 5. 如果 close 真的失败了，再抛异常
+    if (ret == -1) {
+        throw InternalError("Failed to close file: " + path +
+                            " (" + std::strerror(errno) + ")");
+    }
 }
 
 /**

@@ -4,7 +4,9 @@
 
 ## 目录
 
-- [Lab1 学习路线](lab1-learning-roadmap.md)
+- [Lab1 学习笔记：基础知识与 DiskManager 复盘](lab1-notes.md)
+
+原来的分散笔记已合并到这份文档；后续同阶段内容继续追加到对应章节。
 
 ## 记录约定
 
